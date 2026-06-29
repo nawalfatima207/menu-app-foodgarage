@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: 'Liberation Sans', Arial, sans-serif;
+    background: var(--surface-0, #f4f4f4);
+    color: #222;
+  }
+
+  /* ===================== APP UI ===================== */
+  #app {
+    max-width: 460px;
+    margin: 0 auto;
+    padding: 20px 16px 50px;
+  }
+  #app h2 {
+    color: #14887e;
+    font-size: 20px;
+    margin-bottom: 4px;
+  }
+  #app .sub {
+    font-size: 13px;
+    color: #667;
+    margin-bottom: 18px;
+  }
+  #app label {
+    font-size: 13px;
+    color: #556;
+    display: block;
+    margin-bottom: 4px;
+  }
+  #app input {
+    width: 100%;
+    padding: 10px 12px;
+    font-size: 15px;
+    border: 1px solid #cfd8dc;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    box-sizing: border-box;
+  }
+  #app .row {
+    display: flex;
+    gap: 8px;
+  }
+  #app .row > div {
+    flex: 1;
+  }
+  .btn {
+    width: 100%;
+    padding: 12px;
+    font-size: 16px;
+    font-weight: 600;
+    color: #fff;
+    background: #14887e;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    margin-bottom: 10px;
+  }
+  .btn.secondary {
+    background: #fff;
+    color: #14887e;
+    border: 1.5px solid #14887e;
+  }
+  .btn.small {
+    width: auto;
+    padding: 6px 12px;
+    font-size: 12px;
+    margin: 0;
+  }
+  .btn.danger {
+    background: #fff;
+    color: #c33;
+    border: 1.5px solid #c33;
+  }
+  .error-box {
+    background: #fdecea;
+    color: #a33;
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    margin-bottom: 14px;
+  }
+  .nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .nav button {
+    background: none;
+    border: none;
+    color: #14887e;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .hidden { display: none !important; }
+
+  .suggest-box {
+    border: 1px solid #cfd8dc;
+    border-radius: 8px;
+    margin-top: -8px;
+    margin-bottom: 12px;
+    max-height: 180px;
+    overflow-y: auto;
+    background: #fff;
+  }
+  .suggest-item {
+    padding: 10px 12px;
+    font-size: 14px;
+    border-bottom: 1px solid #f0f0f0;
+  }
+  .suggest-item:last-child { border-bottom: none; }
+  .suggest-item:active { background: #f4faf9; }
+
+  .preview-wrap {
+    width: 100%;
+    overflow: hidden;
+    border-radius: 10px;
+    border: 1px solid #e0e0e0;
+    margin-bottom: 16px;
+    background: #fafafa;
+  }
+  .preview-scale-outer {
+    position: relative;
+    width: 100%;
+    padding-top: 70.71%; /* 1241/1755 */
+  }
+  .preview-scale-inner {
+    position: absolute;
+    top: 0; left: 0;
+    width: 1755px;
+    height: 1241px;
+    transform-origin: top left;
+  }
+
+  .db-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid #e6e6e6;
+    border-radius: 10px;
+    margin-bottom: 8px;
+    background: #fff;
+  }
+  .db-thumb {
+    width: 44px;
+    height: 44px;
+    border-radius: 8px;
+    overflow: hidden;
+    flex-shrink: 0;
+    background: #eef3f4;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    color: #99a;
+    text-align: center;
+  }
+  .db-thumb img { width: 100%; height: 100%; object-fit: cover; }
+  .db-info { flex: 1; min-width: 0; }
+  .db-info .nm { font-size: 14px; font-weight: 600; }
+  .db-info .meta { font-size: 12px; color: #778; display: flex; justify-content: space-between; }
+  .db-edit-box {
+    background: #f4faf9;
+    border: 1px solid #14887e;
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 16px;
+  }
+  .db-edit-box p.title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #14887e;
+    margin-bottom: 10px;
+  }
+  .footnote {
+    font-size: 11px;
+    color: #99a;
+    margin-top: 16px;
+    text-align: center;
+  }
+  datalist {}
+
+  /* ===================== MENU TEMPLATE (from uploaded file, unmodified) ===================== */
+  .page {
+    width: 1755px;
+    height: 1241px;
+    display: flex;
+    position: relative;
+    overflow: hidden;
+    background: #fff;
+  }
+  .left {
+    width: 607px;
+    height: 1241px;
+    background: #14887e;
+    color: #fff;
+    position: relative;
+    padding: 60px 55px 60px 55px;
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+  .left h1 {
+    font-size: 38px;
+    font-weight: 800;
+    margin-bottom: 28px;
+    letter-spacing: 1px;
+    position: relative; z-index: 2;
+    text-align: center;
+  }
+  .left .urdu-block {
+    font-family: 'Noto Nastaliq Urdu', serif;
+    direction: rtl;
+    text-align: right;
+    line-height: 1.9;
+    font-size: 24px;
+    position: relative; z-index: 2;
+  }
+  .left .urdu-block p { margin-bottom: 16px; }
+  .left-bottom-circle {
+    position: absolute;
+    bottom: -210px;
+    left: -190px;
+    width: 460px;
+    height: 460px;
+    background: #1c9b90;
+    border-radius: 50%;
+    z-index: 1;
+  }
+  .middle {
+    width: 574px;
+    height: 1241px;
+    background: linear-gradient(to bottom, #cfe9fb 0%, #d9f0fe 45%, #e5f6fd 100%);
+    position: relative;
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+  .middle-photo {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 574px;
+    height: 801px;
+    overflow: hidden;
+    border-radius: 0px 0px 226px 226px;
+    z-index: 2;
+    background: #dceef5;
+  }
+  .middle-photo img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .dish-blob-2 {
+    position: absolute;
+    top: 515px;
+    left: 58px;
+    width: 453px;
+    height: 454px;
+    background: #3e7470;
+    border-radius: 150px 150px 150px 150px;
+    color: #fff;
+    text-align: center;
+    justify-content: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    z-index: 3;
+  }
+  .dish-blob-2 .dish-name {
+    font-size: 42px;
+    font-weight: 800;
+    line-height: 1.1;
+    padding: 0 30px;
+    margin-top: -20px;
+  }
+  .dish-blob-2 .dish-urdu {
+    font-family: 'Noto Nastaliq Urdu', serif;
+    font-size: 40px;
+    margin-top: 25px;
+  }
+  .dish-blob-2 .dish-price {
+    font-size: 26px;
+    font-weight: 500;
+    margin-top: 30px;
+  }
+  .dish-blob-2 .dish-desc {
+    font-size: 26px;
+    font-weight: 400;
+    margin-top: 10px;
+    padding: 0 35px;
+    line-height: 1.2;
+  }
+  .bottom-teal {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 1241px;
+    background: #14887e;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    padding-bottom: 60px;
+  }
+  .bottom-teal .phone {
+    color: #fff;
+    font-size: 26px;
+    font-weight: 800;
+    text-align: center;
+  }
+  .bottom-teal .date {
+    color: #fff;
+    font-size: 24px;
+    font-weight: 400;
+    text-align: center;
+    margin-top: 35px;
+  }
+  .right {
+    width: 574px;
+    height: 1241px;
+    background: #14887e;
+    position: relative;
+    flex-shrink: 0;
+    overflow: hidden;
+    color: #fff;
+  }
+  .right .title-block {
+    padding: 55px 60px 0 60px;
+    text-align: center;
+    position: relative;
+    z-index: 3;
+  }
+  .right .title-block .en {
+    font-size: 40px;
+    font-weight: 400;
+  }
+  .right .title-block .ur {
+    font-family: 'Noto Nastaliq Urdu', serif;
+    font-size: 35px;
+    margin-top: 6px;
+  }
+  .right-photo {
+    position: absolute;
+    top: 340px;
+    left: 0;
+    width: 574px;
+    height: 901px;
+    overflow: hidden;
+    z-index: 1;
+    border-radius: 226px 226px 0px 0px;
+    background: #0f6e56;
+  }
+  .right-photo img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .dish-blob-1 {
+    position: absolute;
+    top: 300px;
+    left: 64px;
+    width: 454px;
+    height: 454px;
+    background: #3e7470;
+    border-radius: 150px 150px 150px 150px;
+    color: #fff;
+    text-align: center;
+    justify-content: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    z-index: 2;
+  }
+  .dish-blob-1 .dish-name {
+    font-size: 45px;
+    font-weight: 800;
+    line-height: 1.1;
+    padding: 0 25px;
+    margin-top: -20px;
+  }
+  .dish-blob-1 .dish-urdu {
+    font-family: 'Noto Nastaliq Urdu', serif;
+    font-size: 40px;
+    margin-top: 25px;
+  }
+  .dish-blob-1 .dish-price {
+    font-size: 26px;
+    font-weight: 500;
+    margin-top: 30px;
+  }
+  .dish-blob-1 .dish-desc {
+    font-size: 26px;
+    font-weight: 400;
+    margin-top: 10px;
+    padding: 0 30px;
+    line-height: 1.2;
+  }
+</style>
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ===== GENERATE SCREEN ===== -->
+  <div id="screen-generate">
+    <div class="nav">
+      <h2 style="margin:0;">Today's menu</h2>
+      <button onclick="showScreen('database')">Edit database</button>
+    </div>
+    <p class="sub">Type the two dish names as saved in your database.</p>
+
+    <label>Vegetable / Daal dish</label>
+    <input id="input-dish2" placeholder="e.g. Safaid Lobia" autocomplete="off"
+      oninput="showSuggestions('dish2')" onfocus="showSuggestions('dish2')">
+    <div id="suggest-dish2" class="suggest-box hidden"></div>
+
+    <label>Chicken dish</label>
+    <input id="input-dish1" placeholder="e.g. White Chicken Karahi" autocomplete="off"
+      oninput="showSuggestions('dish1')" onfocus="showSuggestions('dish1')">
+    <div id="suggest-dish1" class="suggest-box hidden"></div>
+
+    <label>Date</label>
+    <input id="input-date" autocomplete="off">
+
+    <div id="generate-error" class="error-box hidden"></div>
+
+    <button class="btn" onclick="handleGenerate()">Generate menu</button>
+    <div class="footnote" id="db-count"></div>
+  </div>
+
+  <!-- ===== RESULT SCREEN ===== -->
+  <div id="screen-result" class="hidden">
+    <div class="nav">
+      <button onclick="showScreen('generate')">&larr; Back</button>
+      <h2 style="margin:0;font-size:16px;">Preview</h2>
+      <span style="width:40px;"></span>
+    </div>
+
+    <div class="preview-wrap">
+      <div class="preview-scale-outer">
+        <div class="preview-scale-inner" id="preview-scale-inner">
+        </div>
+      </div>
+    </div>
+
+    <!-- Off-screen, full-size, untransformed copy used ONLY for PNG capture -->
+    <div id="menu-canvas" class="page" style="position:absolute; left:-99999px; top:0;">
+            <div class="left">
+              <h1>RULES</h1>
+              <div class="urdu-block">
+                <p>السلام علیکم!</p>
+                <p>ہمارے ہوم فوڈ سروس میں خوش آمدید! 🎉</p>
+                <p>🕖 آرڈر کی ٹائمنگ:<br>آپ روزانہ شام 7:00 بجے سے صبح 11:00 بجے تک اپنا آرڈر بک کر سکتے ہیں۔</p>
+                <p>🍲 روزانہ دو ڈشز بنیں ہوں گی:<br>1. ایک سبزی/ دال.<br>2. ایک چکن کی ڈش</p>
+                <p>📅 ہفتہ وار چھٹی:<br>ہر ہفتہ اور اتوار کو چھٹی ہوگی، اس دن آرڈر دستیاب نہیں ہوگا۔</p>
+                <p>🍽 یہ سہولت صرف دوپہر کے کھانے کے لیے دستیاب ہے</p>
+                <p>📞 شکایت، تجویز یا مزید معلومات کے لیے بھی آپ ہم سے اسی نمبر پر رابطہ کر سکتے ہیں۔</p>
+                <p>آپ کے تعاون اور اعتماد کا شکریہ ۔</p>
+              </div>
+              <div class="left-bottom-circle"></div>
+            </div>
+
+            <div class="middle">
+              <div class="middle-photo">
+                <img id="out-dish2-photo" src="" alt="">
+              </div>
+              <div class="dish-blob-2">
+                <div class="dish-name" id="out-dish2-name"></div>
+                <div class="dish-urdu" id="out-dish2-urdu"></div>
+                <div class="dish-price" id="out-dish2-price"></div>
+                <div class="dish-desc" id="out-dish2-desc"></div>
+              </div>
+              <div class="bottom-teal">
+                <div class="phone">Phone : +92 370 3634494</div>
+                <div class="date" id="out-date"></div>
+              </div>
+            </div>
+
+            <div class="right">
+              <div class="title-block">
+                <div class="en">Menu For Today</div>
+                <div class="ur">آج کا مینو</div>
+              </div>
+              <div class="right-photo">
+                <img id="out-dish1-photo" src="" alt="">
+              </div>
+              <div class="dish-blob-1">
+                <div class="dish-name" id="out-dish1-name"></div>
+                <div class="dish-urdu" id="out-dish1-urdu"></div>
+                <div class="dish-price" id="out-dish1-price"></div>
+                <div class="dish-desc" id="out-dish1-desc"></div>
+              </div>
+            </div>
+    </div>
+
+    <div id="result-error" class="error-box hidden"></div>
+
+    <button class="btn" id="download-btn" onclick="handleDownload()">Download as PNG</button>
+    <button class="btn secondary" onclick="showScreen('generate')">Make another</button>
+  </div>
+
+  <!-- ===== DATABASE SCREEN ===== -->
+  <div id="screen-database" class="hidden">
+    <div class="nav">
+      <button onclick="showScreen('generate')">&larr; Back</button>
+      <h2 style="margin:0;font-size:16px;">Dish database</h2>
+      <button onclick="startAdd()">+ Add</button>
+    </div>
+
+    <div id="db-edit-box" class="db-edit-box hidden">
+      <p class="title" id="db-edit-title">Add new dish</p>
+      <label>Name (English)</label>
+      <input id="draft-name" placeholder="Chicken Pulao">
+      <label>Name (Urdu)</label>
+      <input id="draft-urdu" placeholder="چکن پلاؤ" style="direction:rtl;text-align:right;">
+      <label>Price</label>
+      <input id="draft-price" placeholder="Rs. 250">
+      <label>Description</label>
+      <input id="draft-description" placeholder="e.g. Made with fresh cream and tender chicken">
+      <label>Photo URL</label>
+      <input id="draft-photo" placeholder="https://...">
+      <div class="row">
+        <button class="btn secondary" style="margin-bottom:0;" onclick="cancelEdit()">Cancel</button>
+        <button class="btn" style="margin-bottom:0;" onclick="saveDraft()">Save</button>
+      </div>
+    </div>
+
+    <div id="db-list"></div>
+
+    <p class="footnote">Saved to this device only. Photo field needs an image link (URL).</p>
+  </div>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script>
+var DEFAULT_DISHES = [
+  { name: 'Safaid Lobia', urdu: 'سفید لوبیہ', price: 'Rs. 200', description: '', photo: '' },
+  { name: 'White Chicken Karahi', urdu: 'وائٹ چکن کڑاہی', price: 'Rs. 300', description: '', photo: '' },
+  { name: 'Chicken Pulao', urdu: 'چکن پلاؤ', price: 'Rs. 250', description: '', photo: '' },
+  { name: 'Daal Chana', urdu: 'دال چنا', price: 'Rs. 150', description: '', photo: '' },
+  { name: 'Aloo Qeema', urdu: 'آلو قیمہ', price: 'Rs. 220', description: '', photo: '' },
+  { name: 'Chicken Karahi', urdu: 'چکن کڑاہی', price: 'Rs. 320', description: '', photo: '' },
+  { name: 'Mix Vegetable', urdu: 'مکس ویجیٹیبل', price: 'Rs. 180', description: '', photo: '' },
+  { name: 'Chicken Biryani', urdu: 'چکن بریانی', price: 'Rs. 280', description: '', photo: '' }
+];
+var STORAGE_KEY = 'dish-database';
+var dishes = DEFAULT_DISHES.slice();
+var editIndex = null;
+
+function todayDDMMYYYY() {
+  var d = new Date();
+  var dd = String(d.getDate()).padStart(2,'0');
+  var mm = String(d.getMonth()+1).padStart(2,'0');
+  return dd + '-' + mm + '-' + d.getFullYear();
+}
+
+async function loadDishes() {
+  try {
+    var raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      var parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) dishes = parsed;
+    }
+  } catch (e) {}
+  renderDbList();
+  renderDatalist();
+  updateDbCount();
+}
+
+async function persistDishes() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(dishes));
+  } catch (e) {}
+}
+
+function renderDatalist() {
+  // kept as a no-op for backward compatibility with existing calls
+}
+
+function showSuggestions(which) {
+  var input = document.getElementById('input-' + which);
+  var box = document.getElementById('suggest-' + which);
+  var q = input.value.trim().toLowerCase();
+  var matches = q
+    ? dishes.filter(function(d) { return d.name.toLowerCase().indexOf(q) !== -1; })
+    : dishes.slice();
+
+  if (matches.length === 0) {
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
+
+  box.innerHTML = '';
+  matches.forEach(function(d) {
+    var item = document.createElement('div');
+    item.className = 'suggest-item';
+    item.textContent = d.name;
+    item.onmousedown = function(e) { e.preventDefault(); };
+    item.onclick = function() {
+      input.value = d.name;
+      box.classList.add('hidden');
+    };
+    box.appendChild(item);
+  });
+  box.classList.remove('hidden');
+}
+
+document.addEventListener('click', function(e) {
+  ['dish1', 'dish2'].forEach(function(which) {
+    var input = document.getElementById('input-' + which);
+    var box = document.getElementById('suggest-' + which);
+    if (e.target !== input && !box.contains(e.target)) {
+      box.classList.add('hidden');
+    }
+  });
+});
+
+function updateDbCount() {
+  document.getElementById('db-count').textContent = dishes.length + ' dishes saved in database';
+}
+
+function showScreen(name) {
+  ['generate','result','database'].forEach(function(s) {
+    document.getElementById('screen-' + s).classList.toggle('hidden', s !== name);
+  });
+  if (name === 'database') {
+    document.getElementById('db-edit-box').classList.add('hidden');
+    editIndex = null;
+    renderDbList();
+  }
+  if (name === 'result') {
+    fitPreview();
+  }
+}
+
+function findDish(query) {
+  var q = (query || '').trim().toLowerCase();
+  if (!q) return null;
+  var exact = dishes.find(function(d) { return d.name.toLowerCase() === q; });
+  if (exact) return exact;
+  return dishes.find(function(d) { return d.name.toLowerCase().indexOf(q) !== -1; }) || null;
+}
+
+function handleGenerate() {
+  var errBox = document.getElementById('generate-error');
+  errBox.classList.add('hidden');
+
+  var name1 = document.getElementById('input-dish1').value;
+  var name2 = document.getElementById('input-dish2').value;
+  var date = document.getElementById('input-date').value;
+
+  var d1 = findDish(name1);
+  var d2 = findDish(name2);
+
+  var missing = [];
+  if (!d1) missing.push(name1 || 'chicken dish');
+  if (!d2) missing.push(name2 || 'vegetable/daal dish');
+
+  if (missing.length) {
+    errBox.textContent = "Couldn't find in database: " + missing.join(', ') + ". Check spelling or add it under Edit database.";
+    errBox.classList.remove('hidden');
+    return;
+  }
+
+  document.getElementById('out-dish1-name').textContent = d1.name;
+  document.getElementById('out-dish1-urdu').textContent = d1.urdu;
+  document.getElementById('out-dish1-price').textContent = d1.price;
+  document.getElementById('out-dish1-desc').textContent = d1.description || '';
+  var img1 = document.getElementById('out-dish1-photo');
+  if (d1.photo) {
+    img1.crossOrigin = 'anonymous';
+    img1.src = d1.photo;
+    img1.style.display = '';
+  } else {
+    img1.removeAttribute('src');
+    img1.style.display = 'none';
+  }
+
+  document.getElementById('out-dish2-name').textContent = d2.name;
+  document.getElementById('out-dish2-urdu').textContent = d2.urdu;
+  document.getElementById('out-dish2-price').textContent = d2.price;
+  document.getElementById('out-dish2-desc').textContent = d2.description || '';
+  var img2 = document.getElementById('out-dish2-photo');
+  if (d2.photo) {
+    img2.crossOrigin = 'anonymous';
+    img2.src = d2.photo;
+    img2.style.display = '';
+  } else {
+    img2.removeAttribute('src');
+    img2.style.display = 'none';
+  }
+
+  document.getElementById('out-date').textContent = 'Date : ' + date;
+
+  syncPreview();
+  showScreen('result');
+}
+
+function syncPreview() {
+  var inner = document.getElementById('preview-scale-inner');
+  var source = document.getElementById('menu-canvas');
+  inner.innerHTML = '';
+  var clone = source.cloneNode(true);
+  clone.removeAttribute('id');
+  clone.style.position = 'static';
+  clone.style.left = '0';
+  inner.appendChild(clone);
+}
+
+function fitPreview() {
+  var outer = document.querySelector('.preview-scale-outer');
+  var inner = document.getElementById('preview-scale-inner');
+  var width = outer.getBoundingClientRect().width;
+  var scale = width / 1755;
+  inner.style.transform = 'scale(' + scale + ')';
+}
+window.addEventListener('resize', function() {
+  if (!document.getElementById('screen-result').classList.contains('hidden')) fitPreview();
+});
+
+async function handleDownload() {
+  var btn = document.getElementById('download-btn');
+  var errBox = document.getElementById('result-error');
+  errBox.classList.add('hidden');
+  btn.textContent = 'Preparing image...';
+  btn.disabled = true;
+  try {
+    var canvas = await html2canvas(document.getElementById('menu-canvas'), {
+      width: 1755,
+      height: 1241,
+      scale: 1,
+      useCORS: true,
+      backgroundColor: '#ffffff',
+      imageTimeout: 8000,
+      onclone: function(clonedDoc) {
+        var imgs = clonedDoc.querySelectorAll('#out-dish1-photo, #out-dish2-photo');
+        imgs.forEach(function(img) {
+          if (!img.getAttribute('src')) img.style.display = 'none';
+        });
+      }
+    });
+    var link = document.createElement('a');
+    var date = document.getElementById('input-date').value || todayDDMMYYYY();
+    link.download = 'menu-' + date + '.png';
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  } catch (e) {
+    errBox.textContent = 'Could not export image. A dish photo link may be broken or blocking export — try a different image URL for that dish, or remove it and try again.';
+    errBox.classList.remove('hidden');
+  } finally {
+    btn.textContent = 'Download as PNG';
+    btn.disabled = false;
+  }
+}
+
+/* ===== Database editor ===== */
+function renderDbList() {
+  var list = document.getElementById('db-list');
+  list.innerHTML = '';
+  dishes.forEach(function(d, i) {
+    var row = document.createElement('div');
+    row.className = 'db-row';
+
+    var thumb = document.createElement('div');
+    thumb.className = 'db-thumb';
+    if (d.photo) {
+      var img = document.createElement('img');
+      img.src = d.photo;
+      img.alt = d.name;
+      thumb.appendChild(img);
+    } else {
+      thumb.textContent = 'no photo';
+    }
+
+    var info = document.createElement('div');
+    info.className = 'db-info';
+    var nm = document.createElement('div');
+    nm.className = 'nm';
+    nm.textContent = d.name;
+    var meta = document.createElement('div');
+    meta.className = 'meta';
+    var urduSpan = document.createElement('span');
+    urduSpan.style.fontFamily = "'Noto Nastaliq Urdu', serif";
+    urduSpan.textContent = d.urdu;
+    var priceSpan = document.createElement('span');
+    priceSpan.textContent = d.price;
+    meta.appendChild(urduSpan);
+    meta.appendChild(priceSpan);
+    info.appendChild(nm);
+    info.appendChild(meta);
+    if (d.description) {
+      var descDiv = document.createElement('div');
+      descDiv.style.fontSize = '11px';
+      descDiv.style.color = '#99a';
+      descDiv.style.marginTop = '2px';
+      descDiv.textContent = d.description;
+      info.appendChild(descDiv);
+    }
+
+    var editBtn = document.createElement('button');
+    editBtn.className = 'btn small';
+    editBtn.style.background = 'none';
+    editBtn.style.color = '#14887e';
+    editBtn.style.border = 'none';
+    editBtn.textContent = 'Edit';
+    editBtn.onclick = function() { startEdit(i); };
+
+    var delBtn = document.createElement('button');
+    delBtn.className = 'btn small';
+    delBtn.style.background = 'none';
+    delBtn.style.color = '#c33';
+    delBtn.style.border = 'none';
+    delBtn.textContent = 'Delete';
+    delBtn.onclick = function() { deleteDish(i); };
+
+    row.appendChild(thumb);
+    row.appendChild(info);
+    row.appendChild(editBtn);
+    row.appendChild(delBtn);
+    list.appendChild(row);
+  });
+}
+
+function startAdd() {
+  editIndex = -1;
+  document.getElementById('db-edit-title').textContent = 'Add new dish';
+  document.getElementById('draft-name').value = '';
+  document.getElementById('draft-urdu').value = '';
+  document.getElementById('draft-price').value = '';
+  document.getElementById('draft-description').value = '';
+  document.getElementById('draft-photo').value = '';
+  document.getElementById('db-edit-box').classList.remove('hidden');
+}
+
+function startEdit(i) {
+  editIndex = i;
+  var d = dishes[i];
+  document.getElementById('db-edit-title').textContent = 'Edit dish';
+  document.getElementById('draft-name').value = d.name;
+  document.getElementById('draft-urdu').value = d.urdu;
+  document.getElementById('draft-price').value = d.price;
+  document.getElementById('draft-description').value = d.description || '';
+  document.getElementById('draft-photo').value = d.photo;
+  document.getElementById('db-edit-box').classList.remove('hidden');
+}
+
+function cancelEdit() {
+  document.getElementById('db-edit-box').classList.add('hidden');
+  editIndex = null;
+}
+
+async function saveDraft() {
+  var name = document.getElementById('draft-name').value.trim();
+  if (!name) return;
+  var draft = {
+    name: name,
+    urdu: document.getElementById('draft-urdu').value.trim(),
+    price: document.getElementById('draft-price').value.trim(),
+    description: document.getElementById('draft-description').value.trim(),
+    photo: document.getElementById('draft-photo').value.trim()
+  };
+  if (editIndex === -1) {
+    dishes.push(draft);
+  } else {
+    dishes[editIndex] = draft;
+  }
+  await persistDishes();
+  renderDatalist();
+  updateDbCount();
+  document.getElementById('db-edit-box').classList.add('hidden');
+  editIndex = null;
+  renderDbList();
+}
+
+async function deleteDish(i) {
+  dishes.splice(i, 1);
+  await persistDishes();
+  renderDatalist();
+  updateDbCount();
+  renderDbList();
+}
+
+/* ===== Init ===== */
+document.getElementById('input-date').value = todayDDMMYYYY();
+loadDishes();
+</script>
+</body>
+</html>
