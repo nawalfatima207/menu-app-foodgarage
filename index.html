@@ -234,7 +234,7 @@
     z-index: 1;
   }
   .middle {
-    width: 574px;
+    width: 523px;
     height: 1241px;
     background: linear-gradient(to bottom, #cfe9fb 0%, #d9f0fe 45%, #e5f6fd 100%);
     position: relative;
@@ -245,8 +245,8 @@
     position: absolute;
     top: 0;
     left: 0;
-    width: 574px;
-    height: 801px;
+    width: 523px;
+    height: 620px;
     overflow: hidden;
     border-radius: 0px 0px 226px 226px;
     z-index: 2;
@@ -259,8 +259,8 @@
   }
   .dish-blob-2 {
     position: absolute;
-    top: 515px;
-    left: 58px;
+    top: 415px;
+    left: 19px;
     width: 453px;
     height: 454px;
     background: #3e7470;
@@ -324,7 +324,7 @@
     margin-top: 35px;
   }
   .right {
-    width: 574px;
+    width: 625px;
     height: 1241px;
     background: #14887e;
     position: relative;
@@ -351,7 +351,7 @@
     position: absolute;
     top: 340px;
     left: 0;
-    width: 574px;
+    width: 625px;
     height: 901px;
     overflow: hidden;
     z-index: 1;
@@ -365,7 +365,7 @@
   }
   .dish-blob-1 {
     position: absolute;
-    top: 300px;
+    top: 213px;
     left: 64px;
     width: 454px;
     height: 454px;
@@ -412,7 +412,7 @@
   <!-- ===== GENERATE SCREEN ===== -->
   <div id="screen-generate">
     <div class="nav">
-      <h2 style="margin:0;">Food Garage</h2>
+      <h2 style="margin:0;">Today's menu</h2>
       <button onclick="showScreen('database')">Edit database</button>
     </div>
     <p class="sub">Type the two dish names as saved in your database.</p>
@@ -728,13 +728,30 @@ window.addEventListener('resize', function() {
   if (!document.getElementById('screen-result').classList.contains('hidden')) fitPreview();
 });
 
+async function waitForImage(img) {
+  if (!img || !img.getAttribute('src')) return;
+  if (img.complete && img.naturalWidth > 0) return;
+  await new Promise(function(resolve) {
+    var done = false;
+    function finish() { if (!done) { done = true; resolve(); } }
+    img.addEventListener('load', finish, { once: true });
+    img.addEventListener('error', finish, { once: true });
+    setTimeout(finish, 8000);
+  });
+}
+
 async function handleDownload() {
   var btn = document.getElementById('download-btn');
   var errBox = document.getElementById('result-error');
   errBox.classList.add('hidden');
-  btn.textContent = 'Preparing image...';
+  btn.textContent = 'Loading photos...';
   btn.disabled = true;
   try {
+    var img1 = document.getElementById('out-dish1-photo');
+    var img2 = document.getElementById('out-dish2-photo');
+    await Promise.all([waitForImage(img1), waitForImage(img2)]);
+
+    btn.textContent = 'Preparing image...';
     var canvas = await html2canvas(document.getElementById('menu-canvas'), {
       width: 1755,
       height: 1241,
@@ -895,4 +912,4 @@ document.getElementById('input-date').value = todayDDMMYYYY();
 loadDishes();
 </script>
 </body>
-</html>
+                                                                                           </html>
