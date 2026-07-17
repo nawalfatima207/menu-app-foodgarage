@@ -512,7 +512,10 @@
     <div class="nav">
       <button onclick="showScreen('generate')">&larr; Back</button>
       <h2 style="margin:0;font-size:16px;">Dish database</h2>
-      <button onclick="startAdd()">+ Add</button>
+      <div style="display:flex;gap:8px;">
+        <button onclick="loadDishes()">↻ Refresh</button>
+        <button onclick="startAdd()">+ Add</button>
+      </div>
     </div>
 
     <div id="db-edit-box" class="db-edit-box hidden">
@@ -525,8 +528,14 @@
       <input id="draft-price" placeholder="Rs. 250">
       <label>Description</label>
       <input id="draft-description" placeholder="e.g. Made with fresh cream and tender chicken">
-      <label>Photo URL</label>
-      <input id="draft-photo" placeholder="https://...">
+      <label>Photo</label>
+      <input type="file" id="draft-photo-file" accept="image/*" style="display:none" onchange="handlePhotoSelect(this)">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">
+        <button type="button" class="btn" style="margin-bottom:0;flex:1;" onclick="document.getElementById('draft-photo-file').click()">Choose from gallery</button>
+        <div id="draft-photo-preview" style="width:48px;height:48px;border-radius:8px;overflow:hidden;background:#eef3f4;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:9px;color:#99a;text-align:center;">no photo</div>
+      </div>
+      <div id="upload-status" style="font-size:12px;color:#14887e;margin-bottom:10px;display:none;"></div>
+      <input type="hidden" id="draft-photo">
       <div class="row">
         <button class="btn secondary" style="margin-bottom:0;" onclick="cancelEdit()">Cancel</button>
         <button class="btn" style="margin-bottom:0;" onclick="saveDraft()">Save</button>
@@ -535,7 +544,7 @@
 
     <div id="db-list"></div>
 
-    <p class="footnote">Saved to this device only. Photo field needs an image link (URL).</p>
+    <p class="footnote">Database loads from Google Sheets. To add or edit dishes, update your sheet — then pull down to refresh or reopen the app.</p>
   </div>
 
 </div>
@@ -552,8 +561,9 @@ var DEFAULT_DISHES = [
   { name: 'Mix Vegetable', urdu: 'مکس ویجیٹیبل', price: 'Rs. 180', description: '', photo: '' },
   { name: 'Chicken Biryani', urdu: 'چکن بریانی', price: 'Rs. 280', description: '', photo: '' }
 ];
-var STORAGE_KEY = 'dish-database';
-var dishes = DEFAULT_DISHES.slice();
+var SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSOo_IffywHv8ZQGwHp_DbuH_ynYMdRmO9cH6I3JuEu94aTXrr6MkWfCGIolKPiNdJBHOkMzna9JRP_/pub?gid=0&single=true&output=csv';
+var APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbycS9iiReeQVT37E0HWb_UpOMv7kC5xNPxop1nHuSx1-w8a3W91rh765JWclWuDfWdrLQ/exec';
+var dishes = [];
 var editIndex = null;
 
 function todayDDMMYYYY() {
@@ -563,23 +573,48 @@ function todayDDMMYYYY() {
   return dd + '-' + mm + '-' + d.getFullYear();
 }
 
+function parseCSV(text) {
+  var lines = text.trim().split('\n');
+  if (lines.length < 2) return [];
+  // Skip header row (row 0), parse remaining rows
+  var result = [];
+  for (var i = 1; i < lines.length; i++) {
+    var cols = lines[i].split(',').map(function(c) { return c.trim().replace(/^"|"$/g, ''); });
+    if (!cols[0]) continue; // skip empty rows
+    result.push({
+      name:        cols[0] || '',
+      urdu:        cols[1] || '',
+      price:       cols[2] || '',
+      description: cols[3] || '',
+      photo:       cols[4] || ''
+    });
+  }
+  return result;
+}
+
 async function loadDishes() {
   try {
-    var raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      var parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) dishes = parsed;
+    document.getElementById('db-count').textContent = 'Loading database...';
+    var response = await fetch(SHEET_CSV_URL);
+    var text = await response.text();
+    var parsed = parseCSV(text);
+    if (parsed.length > 0) {
+      dishes = parsed;
+    } else {
+      dishes = DEFAULT_DISHES.slice();
     }
-  } catch (e) {}
+  } catch (e) {
+    // If fetch fails (offline etc), fall back to defaults
+    dishes = DEFAULT_DISHES.slice();
+    document.getElementById('db-count').textContent = 'Could not load database — check your connection.';
+  }
   renderDbList();
   renderDatalist();
   updateDbCount();
 }
 
 async function persistDishes() {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(dishes));
-  } catch (e) {}
+  // Data is now managed in Google Sheets — no local save needed
 }
 
 function renderDatalist() {
@@ -728,7 +763,19 @@ window.addEventListener('resize', function() {
   if (!document.getElementById('screen-result').classList.contains('hidden')) fitPreview();
 });
 
-async function waitForImage(img) {
+async function preloadImageAsBlob(src) {
+  if (!src) return null;
+  try {
+    var response = await fetch(src, { mode: 'cors' });
+    var blob = await response.blob();
+    return URL.createObjectURL(blob);
+  } catch (e) {
+    // If fetch fails (CORS etc), fall back to direct src
+    return src;
+  }
+}
+
+async function waitForImageElement(img) {
   if (!img || !img.getAttribute('src')) return;
   if (img.complete && img.naturalWidth > 0) return;
   await new Promise(function(resolve) {
@@ -736,7 +783,7 @@ async function waitForImage(img) {
     function finish() { if (!done) { done = true; resolve(); } }
     img.addEventListener('load', finish, { once: true });
     img.addEventListener('error', finish, { once: true });
-    setTimeout(finish, 8000);
+    setTimeout(finish, 10000);
   });
 }
 
@@ -746,10 +793,27 @@ async function handleDownload() {
   errBox.classList.add('hidden');
   btn.textContent = 'Loading photos...';
   btn.disabled = true;
+
+  var blobUrl1 = null;
+  var blobUrl2 = null;
+
   try {
     var img1 = document.getElementById('out-dish1-photo');
     var img2 = document.getElementById('out-dish2-photo');
-    await Promise.all([waitForImage(img1), waitForImage(img2)]);
+    var src1 = img1.getAttribute('src') || '';
+    var src2 = img2.getAttribute('src') || '';
+
+    // Pre-load images as local blob URLs so html2canvas never needs to re-fetch
+    if (src1) {
+      blobUrl1 = await preloadImageAsBlob(src1);
+      img1.src = blobUrl1;
+      await waitForImageElement(img1);
+    }
+    if (src2) {
+      blobUrl2 = await preloadImageAsBlob(src2);
+      img2.src = blobUrl2;
+      await waitForImageElement(img2);
+    }
 
     btn.textContent = 'Preparing image...';
     var canvas = await html2canvas(document.getElementById('menu-canvas'), {
@@ -757,8 +821,9 @@ async function handleDownload() {
       height: 1241,
       scale: 1,
       useCORS: true,
+      allowTaint: true,
       backgroundColor: '#ffffff',
-      imageTimeout: 8000,
+      imageTimeout: 15000,
       onclone: function(clonedDoc) {
         var imgs = clonedDoc.querySelectorAll('#out-dish1-photo, #out-dish2-photo');
         imgs.forEach(function(img) {
@@ -766,15 +831,20 @@ async function handleDownload() {
         });
       }
     });
+
     var link = document.createElement('a');
     var date = document.getElementById('input-date').value || todayDDMMYYYY();
     link.download = 'menu-' + date + '.png';
     link.href = canvas.toDataURL('image/png');
     link.click();
+
   } catch (e) {
-    errBox.textContent = 'Could not export image. A dish photo link may be broken or blocking export — try a different image URL for that dish, or remove it and try again.';
+    errBox.textContent = 'Could not export image. Try a different photo link for the dish, or remove the photo and try again.';
     errBox.classList.remove('hidden');
   } finally {
+    // Clean up blob URLs to free memory
+    if (blobUrl1 && blobUrl1.startsWith('blob:')) URL.revokeObjectURL(blobUrl1);
+    if (blobUrl2 && blobUrl2.startsWith('blob:')) URL.revokeObjectURL(blobUrl2);
     btn.textContent = 'Download as PNG';
     btn.disabled = false;
   }
@@ -848,6 +918,33 @@ function renderDbList() {
   });
 }
 
+function resetPhotoUI() {
+  document.getElementById('draft-photo').value = '';
+  document.getElementById('draft-photo-file').value = '';
+  document.getElementById('upload-status').style.display = 'none';
+  document.getElementById('upload-status').textContent = '';
+  document.getElementById('upload-status').style.color = '#14887e';
+  var preview = document.getElementById('draft-photo-preview');
+  preview.innerHTML = 'no photo';
+}
+
+function setPhotoUI(src) {
+  document.getElementById('draft-photo').value = src || '';
+  document.getElementById('upload-status').style.display = 'none';
+  var preview = document.getElementById('draft-photo-preview');
+  if (src) {
+    preview.innerHTML = '';
+    var img = document.createElement('img');
+    img.src = src;
+    img.style.width = '100%';
+    img.style.height = '100%';
+    img.style.objectFit = 'cover';
+    preview.appendChild(img);
+  } else {
+    preview.innerHTML = 'no photo';
+  }
+}
+
 function startAdd() {
   editIndex = -1;
   document.getElementById('db-edit-title').textContent = 'Add new dish';
@@ -855,7 +952,7 @@ function startAdd() {
   document.getElementById('draft-urdu').value = '';
   document.getElementById('draft-price').value = '';
   document.getElementById('draft-description').value = '';
-  document.getElementById('draft-photo').value = '';
+  resetPhotoUI();
   document.getElementById('db-edit-box').classList.remove('hidden');
 }
 
@@ -867,13 +964,72 @@ function startEdit(i) {
   document.getElementById('draft-urdu').value = d.urdu;
   document.getElementById('draft-price').value = d.price;
   document.getElementById('draft-description').value = d.description || '';
-  document.getElementById('draft-photo').value = d.photo;
+  setPhotoUI(d.photo || '');
   document.getElementById('db-edit-box').classList.remove('hidden');
+}
+
+var CLOUDINARY_CLOUD = 'mk6uyu2w';
+var CLOUDINARY_PRESET = 'food_garage';
+var CLOUDINARY_URL = 'https://api.cloudinary.com/v1_1/' + CLOUDINARY_CLOUD + '/image/upload';
+
+async function handlePhotoSelect(input) {
+  var file = input.files[0];
+  if (!file) return;
+
+  var status = document.getElementById('upload-status');
+  var saveBtn = document.querySelector('#db-edit-box .btn:last-child');
+  status.textContent = 'Uploading photo...';
+  status.style.display = 'block';
+  saveBtn.disabled = true;
+
+  try {
+    var formData = new FormData();
+    formData.append('file', file);
+    formData.append('upload_preset', CLOUDINARY_PRESET);
+
+    var response = await fetch(CLOUDINARY_URL, {
+      method: 'POST',
+      body: formData
+    });
+    var result = await response.json();
+
+    if (result.secure_url) {
+      document.getElementById('draft-photo').value = result.secure_url;
+      status.textContent = '✓ Photo uploaded successfully';
+      status.style.color = '#2e7d32';
+
+      // Show preview
+      var preview = document.getElementById('draft-photo-preview');
+      preview.innerHTML = '';
+      var img = document.createElement('img');
+      img.src = result.secure_url;
+      img.style.width = '100%';
+      img.style.height = '100%';
+      img.style.objectFit = 'cover';
+      preview.appendChild(img);
+    } else {
+      throw new Error('Upload failed');
+    }
+  } catch (e) {
+    status.textContent = '✗ Upload failed — check your connection and try again';
+    status.style.color = '#a33';
+    document.getElementById('draft-photo').value = '';
+  } finally {
+    saveBtn.disabled = false;
+  }
 }
 
 function cancelEdit() {
   document.getElementById('db-edit-box').classList.add('hidden');
   editIndex = null;
+}
+
+async function postToSheet(payload) {
+  var response = await fetch(APPS_SCRIPT_URL, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+  return await response.json();
 }
 
 async function saveDraft() {
@@ -886,25 +1042,46 @@ async function saveDraft() {
     description: document.getElementById('draft-description').value.trim(),
     photo: document.getElementById('draft-photo').value.trim()
   };
-  if (editIndex === -1) {
-    dishes.push(draft);
-  } else {
-    dishes[editIndex] = draft;
+
+  var saveBtn = document.querySelector('#db-edit-box .btn:last-child');
+  saveBtn.textContent = 'Saving...';
+  saveBtn.disabled = true;
+
+  try {
+    if (editIndex === -1) {
+      // New dish — add to sheet
+      await postToSheet({ action: 'add', ...draft });
+      dishes.push(draft);
+    } else {
+      // Edit existing — delete old row, add updated row
+      await postToSheet({ action: 'delete', name: dishes[editIndex].name });
+      await postToSheet({ action: 'add', ...draft });
+      dishes[editIndex] = draft;
+    }
+    renderDatalist();
+    updateDbCount();
+    document.getElementById('db-edit-box').classList.add('hidden');
+    editIndex = null;
+    renderDbList();
+  } catch (e) {
+    alert('Could not save to sheet. Check your internet connection and try again.');
+  } finally {
+    saveBtn.textContent = 'Save';
+    saveBtn.disabled = false;
   }
-  await persistDishes();
-  renderDatalist();
-  updateDbCount();
-  document.getElementById('db-edit-box').classList.add('hidden');
-  editIndex = null;
-  renderDbList();
 }
 
 async function deleteDish(i) {
-  dishes.splice(i, 1);
-  await persistDishes();
-  renderDatalist();
-  updateDbCount();
-  renderDbList();
+  if (!confirm('Delete ' + dishes[i].name + '?')) return;
+  try {
+    await postToSheet({ action: 'delete', name: dishes[i].name });
+    dishes.splice(i, 1);
+    renderDatalist();
+    updateDbCount();
+    renderDbList();
+  } catch (e) {
+    alert('Could not delete from sheet. Check your internet connection and try again.');
+  }
 }
 
 /* ===== Init ===== */
@@ -912,4 +1089,4 @@ document.getElementById('input-date').value = todayDDMMYYYY();
 loadDishes();
 </script>
 </body>
-                                                                                           </html>
+</html>                                                                                  </html>
