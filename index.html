@@ -770,7 +770,6 @@ async function preloadImageAsBlob(src) {
     var blob = await response.blob();
     return URL.createObjectURL(blob);
   } catch (e) {
-    // If fetch fails (CORS etc), fall back to direct src
     return src;
   }
 }
@@ -794,43 +793,33 @@ async function handleDownload() {
   btn.textContent = 'Loading photos...';
   btn.disabled = true;
 
-  var blobUrl1 = null;
-  var blobUrl2 = null;
-
   try {
-    var img1 = document.getElementById('out-dish1-photo');
-    var img2 = document.getElementById('out-dish2-photo');
-    var src1 = img1.getAttribute('src') || '';
-    var src2 = img2.getAttribute('src') || '';
-
-    // Pre-load images as local blob URLs so html2canvas never needs to re-fetch
-    if (src1) {
-      blobUrl1 = await preloadImageAsBlob(src1);
-      img1.src = blobUrl1;
-      await waitForImageElement(img1);
-    }
-    if (src2) {
-      blobUrl2 = await preloadImageAsBlob(src2);
-      img2.src = blobUrl2;
-      await waitForImageElement(img2);
-    }
+    // Wait for all images in the preview to be fully loaded
+    var allImgs = document.querySelectorAll('#preview-scale-inner img');
+    await Promise.all(Array.from(allImgs).map(waitForImageElement));
 
     btn.textContent = 'Preparing image...';
-    var canvas = await html2canvas(document.getElementById('menu-canvas'), {
+
+    // Temporarily remove the scale transform so html2canvas captures at true 1755x1241
+    var inner = document.getElementById('preview-scale-inner');
+    var savedTransform = inner.style.transform;
+    inner.style.transform = 'none';
+
+    // Small delay to let browser re-render without transform
+    await new Promise(function(resolve) { setTimeout(resolve, 100); });
+
+    var canvas = await html2canvas(inner, {
       width: 1755,
       height: 1241,
       scale: 1,
       useCORS: true,
       allowTaint: true,
       backgroundColor: '#ffffff',
-      imageTimeout: 15000,
-      onclone: function(clonedDoc) {
-        var imgs = clonedDoc.querySelectorAll('#out-dish1-photo, #out-dish2-photo');
-        imgs.forEach(function(img) {
-          if (!img.getAttribute('src')) img.style.display = 'none';
-        });
-      }
+      imageTimeout: 15000
     });
+
+    // Restore the scale transform
+    inner.style.transform = savedTransform;
 
     var link = document.createElement('a');
     var date = document.getElementById('input-date').value || todayDDMMYYYY();
@@ -841,10 +830,10 @@ async function handleDownload() {
   } catch (e) {
     errBox.textContent = 'Could not export image. Try a different photo link for the dish, or remove the photo and try again.';
     errBox.classList.remove('hidden');
+    // Restore transform in case of error
+    var inner = document.getElementById('preview-scale-inner');
+    if (inner) inner.style.transform = '';
   } finally {
-    // Clean up blob URLs to free memory
-    if (blobUrl1 && blobUrl1.startsWith('blob:')) URL.revokeObjectURL(blobUrl1);
-    if (blobUrl2 && blobUrl2.startsWith('blob:')) URL.revokeObjectURL(blobUrl2);
     btn.textContent = 'Download as PNG';
     btn.disabled = false;
   }
@@ -1089,4 +1078,4 @@ document.getElementById('input-date').value = todayDDMMYYYY();
 loadDishes();
 </script>
 </body>
-</html>                                                                                  </html>
+</html>
