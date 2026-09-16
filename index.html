@@ -600,18 +600,15 @@
       <span style="width:40px;"></span>
     </div>
 
-    <label>Loyverse access token</label>
-    <input id="setting-loyverse-token" type="password" placeholder="Personal access token" autocomplete="off">
-
     <label>Loyverse store ID (optional)</label>
     <input id="setting-store-id" placeholder="e.g. f98b2265-711d-11ea-8d93-0603131a05b8">
 
-    <label>Sales sheet Apps Script URL (optional)</label>
+    <label>POS Apps Script URL</label>
     <input id="setting-sales-script" placeholder="https://script.google.com/macros/s/.../exec">
 
     <button class="btn" onclick="saveSettings()">Save settings</button>
 
-    <p class="footnote">Your Loyverse token and settings are stored only in this browser's local database — they are never sent anywhere except directly to Loyverse's API and, if set, your own Apps Script sales sheet.</p>
+    <p class="footnote">Your Loyverse token lives only in your Apps Script (never in this browser). This app only needs your Apps Script URL to sync receipts and shifts, and to mirror sales to your Sales sheet.</p>
   </div>
 
 </div>
@@ -1216,21 +1213,18 @@ function posDbPut(storeName, value) {
 }
 
 /* ---- Settings ---- */
-var posSettings = { loyverseToken: '', storeId: '', salesScriptUrl: '' };
+var posSettings = { storeId: '', salesScriptUrl: '' };
 
 async function loadPosSettings() {
   var rows = await posDbGetAll('settings');
   rows.forEach(function(r) { posSettings[r.key] = r.value; });
-  document.getElementById('setting-loyverse-token').value = posSettings.loyverseToken || '';
   document.getElementById('setting-store-id').value = posSettings.storeId || '';
   document.getElementById('setting-sales-script').value = posSettings.salesScriptUrl || '';
 }
 
 async function saveSettings() {
-  posSettings.loyverseToken = document.getElementById('setting-loyverse-token').value.trim();
   posSettings.storeId = document.getElementById('setting-store-id').value.trim();
   posSettings.salesScriptUrl = document.getElementById('setting-sales-script').value.trim();
-  await posDbPut('settings', { key: 'loyverseToken', value: posSettings.loyverseToken });
   await posDbPut('settings', { key: 'storeId', value: posSettings.storeId });
   await posDbPut('settings', { key: 'salesScriptUrl', value: posSettings.salesScriptUrl });
   showScreen('pos');
@@ -1247,19 +1241,27 @@ async function saveSettings() {
 var LOYVERSE_API_BASE = 'https://api.loyverse.com/v1.0';
 
 async function loyverseFetch(path, params) {
-  if (!posSettings.loyverseToken) throw new Error('No Loyverse access token set. Add it in POS settings.');
-  var url = LOYVERSE_API_BASE + path;
+  // Loyverse's API does not send Access-Control-Allow-Origin, so it
+  // cannot be called directly from browser JS (confirmed via a real
+  // CORS error in testing). Instead we call our own Apps Script,
+  // which holds the Loyverse token server-side and proxies the
+  // request — same pattern already used for the dish database.
+  if (!posSettings.salesScriptUrl) throw new Error('No POS Apps Script URL set. Add it in POS settings.');
+  var action = path === '/receipts' ? 'receipts' : (path === '/shifts' ? 'shifts' : null);
+  if (!action) throw new Error('Unsupported Loyverse path: ' + path);
+
+  var url = posSettings.salesScriptUrl + '?action=' + action;
   if (params) {
     var qs = Object.keys(params)
       .filter(function(k) { return params[k] !== undefined && params[k] !== null && params[k] !== ''; })
       .map(function(k) { return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]); })
       .join('&');
-    if (qs) url += '?' + qs;
+    if (qs) url += '&' + qs;
   }
-  var res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + posSettings.loyverseToken } });
+  var res = await fetch(url);
   if (!res.ok) {
     var text = await res.text().catch(function(){ return ''; });
-    throw new Error('Loyverse API error ' + res.status + ': ' + text);
+    throw new Error('Proxy error ' + res.status + ': ' + text);
   }
   return res.json();
 }
@@ -1544,7 +1546,7 @@ var posPollHandle = null;
 function startPosPolling() {
   if (posPollHandle) clearInterval(posPollHandle);
   posPollHandle = setInterval(function() {
-    if (posSettings.loyverseToken) syncNow();
+    if (posSettings.salesScriptUrl) syncNow();
   }, 20000);
 }
 
@@ -1554,7 +1556,7 @@ async function initPos() {
     posDb = await openPosDb();
     await loadPosSettings();
     await renderSalesList();
-    if (posSettings.loyverseToken) startPosPolling();
+    if (posSettings.salesScriptUrl) startPosPolling();
   } catch (e) {
     console.warn('POS init failed:', e);
   }
