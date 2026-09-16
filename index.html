@@ -101,6 +101,21 @@
   }
   .hidden { display: none !important; }
 
+  .sale-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 12px;
+    border: 1px solid #e6e6e6;
+    border-radius: 10px;
+    margin-bottom: 8px;
+    background: #fff;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .sale-row .sale-amt { font-weight: 600; color: #14887e; }
+  .sale-row .sale-meta { font-size: 11px; color: #99a; margin-top: 2px; }
+
   .suggest-box {
     border: 1px solid #cfd8dc;
     border-radius: 8px;
@@ -416,7 +431,10 @@
   <div id="screen-generate">
     <div class="nav">
       <h2 style="margin:0;">Today's menu</h2>
-      <button onclick="showScreen('database')">Edit database</button>
+      <div style="display:flex; gap:14px;">
+        <button onclick="showScreen('pos')">POS</button>
+        <button onclick="showScreen('database')">Edit database</button>
+      </div>
     </div>
     <p class="sub">Type the two dish names as saved in your database.</p>
 
@@ -550,6 +568,52 @@
     <p class="footnote">Database loads from Google Sheets. To add or edit dishes, update your sheet — then pull down to refresh or reopen the app.</p>
   </div>
 
+  <!-- ===== POS SCREEN ===== -->
+  <div id="screen-pos" class="hidden">
+    <div class="nav">
+      <button onclick="showScreen('generate')">&larr; Back</button>
+      <h2 style="margin:0;font-size:16px;">POS (Loyverse)</h2>
+      <button onclick="showScreen('pos-settings')">Settings</button>
+    </div>
+
+    <div style="display:flex; gap:8px; margin-bottom:10px;">
+      <button class="btn small" style="margin-bottom:0;flex:1;" onclick="connectPrinter()">🖨️ Connect printer</button>
+      <button class="btn small secondary" style="margin-bottom:0;flex:1;" onclick="syncNow()">↻ Sync now</button>
+    </div>
+
+    <p id="pos-status" class="footnote" style="margin-top:0;"></p>
+
+    <div id="pos-error" class="error-box hidden"></div>
+
+    <p class="sub" style="margin-top:6px;">Recent sales <span style="font-weight:400;color:#99a;">(tap a sale to reprint its slip)</span></p>
+    <div id="pos-sales-list"></div>
+
+    <button class="btn secondary" style="margin-top:14px;" onclick="closeShiftAndPrint()">Close shift &amp; print report</button>
+    <p class="footnote">Automatic reports print when Loyverse marks a shift closed. Use this button to print one manually for today's sales at any time.</p>
+  </div>
+
+  <!-- ===== POS SETTINGS SCREEN ===== -->
+  <div id="screen-pos-settings" class="hidden">
+    <div class="nav">
+      <button onclick="showScreen('pos')">&larr; Back</button>
+      <h2 style="margin:0;font-size:16px;">POS settings</h2>
+      <span style="width:40px;"></span>
+    </div>
+
+    <label>Loyverse access token</label>
+    <input id="setting-loyverse-token" type="password" placeholder="Personal access token" autocomplete="off">
+
+    <label>Loyverse store ID (optional)</label>
+    <input id="setting-store-id" placeholder="e.g. f98b2265-711d-11ea-8d93-0603131a05b8">
+
+    <label>Sales sheet Apps Script URL (optional)</label>
+    <input id="setting-sales-script" placeholder="https://script.google.com/macros/s/.../exec">
+
+    <button class="btn" onclick="saveSettings()">Save settings</button>
+
+    <p class="footnote">Your Loyverse token and settings are stored only in this browser's local database — they are never sent anywhere except directly to Loyverse's API and, if set, your own Apps Script sales sheet.</p>
+  </div>
+
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
@@ -668,7 +732,7 @@ function updateDbCount() {
 }
 
 function showScreen(name) {
-  ['generate','result','database'].forEach(function(s) {
+  ['generate','result','database','pos','pos-settings'].forEach(function(s) {
     document.getElementById('screen-' + s).classList.toggle('hidden', s !== name);
   });
   if (name === 'database') {
@@ -678,6 +742,12 @@ function showScreen(name) {
   }
   if (name === 'result') {
     fitPreview();
+  }
+  if (name === 'pos') {
+    renderSalesList();
+  }
+  if (name === 'pos-settings') {
+    loadPosSettings();
   }
 }
 
@@ -1076,9 +1146,424 @@ async function deleteDish(i) {
   }
 }
 
+/* ============================================================
+   POS / LOYVERSE MODULE
+   ------------------------------------------------------------
+   - IndexedDB stores sales/shifts/settings locally (works offline,
+     dedupes by Loyverse receipt_number so re-syncing is safe).
+   - Loyverse REST API v1.0 is polled for new receipts and shift
+     status using a personal access token (Bearer auth).
+   - Finalized sales are optionally mirrored to a Google Sheet via
+     an Apps Script web app, same pattern as the dish database.
+   - Slips and end-of-shift reports print via WebUSB directly to
+     the PT-210 thermal printer using raw ESC/POS commands — this
+     is a separate USB connection from Loyverse's own Bluetooth
+     link to the same printer, so the two do not conflict.
+   ============================================================ */
+
+var POS_DB_NAME = 'foodgarage_pos';
+var POS_DB_VERSION = 1;
+var posDb = null;
+
+function openPosDb() {
+  return new Promise(function(resolve, reject) {
+    var req = indexedDB.open(POS_DB_NAME, POS_DB_VERSION);
+    req.onupgradeneeded = function(e) {
+      var db = e.target.result;
+      if (!db.objectStoreNames.contains('sales')) {
+        db.createObjectStore('sales', { keyPath: 'receipt_number' });
+      }
+      if (!db.objectStoreNames.contains('shifts')) {
+        db.createObjectStore('shifts', { keyPath: 'shift_id' });
+      }
+      if (!db.objectStoreNames.contains('settings')) {
+        db.createObjectStore('settings', { keyPath: 'key' });
+      }
+    };
+    req.onsuccess = function(e) { resolve(e.target.result); };
+    req.onerror = function(e) { reject(e.target.error); };
+  });
+}
+
+function posDbGet(storeName, key) {
+  return new Promise(function(resolve, reject) {
+    if (!posDb) { resolve(null); return; }
+    var tx = posDb.transaction(storeName, 'readonly');
+    var req = tx.objectStore(storeName).get(key);
+    req.onsuccess = function() { resolve(req.result || null); };
+    req.onerror = function() { reject(req.error); };
+  });
+}
+
+function posDbGetAll(storeName) {
+  return new Promise(function(resolve, reject) {
+    if (!posDb) { resolve([]); return; }
+    var tx = posDb.transaction(storeName, 'readonly');
+    var req = tx.objectStore(storeName).getAll();
+    req.onsuccess = function() { resolve(req.result || []); };
+    req.onerror = function() { reject(req.error); };
+  });
+}
+
+function posDbPut(storeName, value) {
+  return new Promise(function(resolve, reject) {
+    if (!posDb) { resolve(); return; }
+    var tx = posDb.transaction(storeName, 'readwrite');
+    tx.objectStore(storeName).put(value);
+    tx.oncomplete = function() { resolve(); };
+    tx.onerror = function() { reject(tx.error); };
+  });
+}
+
+/* ---- Settings ---- */
+var posSettings = { loyverseToken: '', storeId: '', salesScriptUrl: '' };
+
+async function loadPosSettings() {
+  var rows = await posDbGetAll('settings');
+  rows.forEach(function(r) { posSettings[r.key] = r.value; });
+  document.getElementById('setting-loyverse-token').value = posSettings.loyverseToken || '';
+  document.getElementById('setting-store-id').value = posSettings.storeId || '';
+  document.getElementById('setting-sales-script').value = posSettings.salesScriptUrl || '';
+}
+
+async function saveSettings() {
+  posSettings.loyverseToken = document.getElementById('setting-loyverse-token').value.trim();
+  posSettings.storeId = document.getElementById('setting-store-id').value.trim();
+  posSettings.salesScriptUrl = document.getElementById('setting-sales-script').value.trim();
+  await posDbPut('settings', { key: 'loyverseToken', value: posSettings.loyverseToken });
+  await posDbPut('settings', { key: 'storeId', value: posSettings.storeId });
+  await posDbPut('settings', { key: 'salesScriptUrl', value: posSettings.salesScriptUrl });
+  showScreen('pos');
+  setPosStatus('Settings saved.');
+  startPosPolling();
+}
+
+/* ---- Loyverse API ----
+   Docs: https://developer.loyverse.com/docs/
+   Auth: personal access token as a Bearer header.
+   NOTE: verify these exact endpoint/param names against your own
+   Loyverse developer dashboard before relying on this in production —
+   Loyverse can change field names between API versions. */
+var LOYVERSE_API_BASE = 'https://api.loyverse.com/v1.0';
+
+async function loyverseFetch(path, params) {
+  if (!posSettings.loyverseToken) throw new Error('No Loyverse access token set. Add it in POS settings.');
+  var url = LOYVERSE_API_BASE + path;
+  if (params) {
+    var qs = Object.keys(params)
+      .filter(function(k) { return params[k] !== undefined && params[k] !== null && params[k] !== ''; })
+      .map(function(k) { return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]); })
+      .join('&');
+    if (qs) url += '?' + qs;
+  }
+  var res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + posSettings.loyverseToken } });
+  if (!res.ok) {
+    var text = await res.text().catch(function(){ return ''; });
+    throw new Error('Loyverse API error ' + res.status + ': ' + text);
+  }
+  return res.json();
+}
+
+/* ---- Sync ---- */
+async function syncNow() {
+  setPosStatus('Syncing...');
+  hidePosError();
+  try {
+    await syncReceipts();
+    await syncShifts();
+    await renderSalesList();
+    setPosStatus('Last synced ' + new Date().toLocaleTimeString());
+  } catch (e) {
+    showPosError(e.message || 'Sync failed.');
+    setPosStatus('Sync failed — check settings and connection.');
+  }
+}
+
+async function syncReceipts() {
+  var params = { limit: 50 };
+  if (posSettings.storeId) params.store_id = posSettings.storeId;
+  // Only pull receipts updated recently — this keeps each request small.
+  // Re-fetching overlapping receipts is harmless because of the dedup
+  // check below (keyed on receipt_number).
+  params.updated_at_min = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+
+  var data = await loyverseFetch('/receipts', params);
+  var receipts = data.receipts || [];
+  for (var i = 0; i < receipts.length; i++) {
+    var r = receipts[i];
+    var existing = await posDbGet('sales', r.receipt_number);
+    if (existing) continue; // already imported — idempotent sync
+
+    var sale = {
+      receipt_number: r.receipt_number,
+      customer_name: (r.customer && r.customer.name) || r.customer_name || '',
+      total_money: r.total_money,
+      payment_method: (r.payments && r.payments[0] && r.payments[0].name) || '',
+      created_at: r.receipt_date || r.created_at,
+      shift_id: r.shift_id || null,
+      printed: false,
+      mirrored: false
+    };
+    await posDbPut('sales', sale);
+    await mirrorSaleToSheet(sale);
+  }
+}
+
+async function syncShifts() {
+  var params = {};
+  if (posSettings.storeId) params.store_id = posSettings.storeId;
+  var data = await loyverseFetch('/shifts', params);
+  var shifts = data.shifts || [];
+  for (var i = 0; i < shifts.length; i++) {
+    var s = shifts[i];
+    var existing = await posDbGet('shifts', s.id);
+    var wasOpen = existing && existing.status === 'OPEN';
+    var nowClosed = s.status === 'CLOSED';
+    await posDbPut('shifts', { shift_id: s.id, status: s.status, opened_at: s.opened_at, closed_at: s.closed_at });
+    if (wasOpen && nowClosed) {
+      await printEndOfShiftReport(s.id); // shift just closed — auto-print report
+    }
+  }
+}
+
+async function mirrorSaleToSheet(sale) {
+  if (!posSettings.salesScriptUrl) return; // mirror is optional until configured
+  try {
+    await fetch(posSettings.salesScriptUrl, {
+      method: 'POST',
+      body: JSON.stringify(Object.assign({ action: 'add_sale' }, sale))
+    });
+    sale.mirrored = true;
+    await posDbPut('sales', sale);
+  } catch (e) {
+    // A failed Sheets mirror should never block the local record or printing.
+    console.warn('Could not mirror sale to sheet:', e);
+  }
+}
+
+/* ---- Sales list UI ---- */
+async function renderSalesList() {
+  var sales = await posDbGetAll('sales');
+  sales.sort(function(a, b) { return new Date(b.created_at) - new Date(a.created_at); });
+  var list = document.getElementById('pos-sales-list');
+  list.innerHTML = '';
+  if (sales.length === 0) {
+    list.innerHTML = '<p class="footnote">No sales synced yet. Tap "Sync now" once your Loyverse token is set.</p>';
+    return;
+  }
+  sales.slice(0, 20).forEach(function(s) {
+    var row = document.createElement('div');
+    row.className = 'sale-row';
+    var left = document.createElement('div');
+    var nameDiv = document.createElement('div');
+    nameDiv.textContent = s.customer_name || 'Walk-in customer';
+    var metaDiv = document.createElement('div');
+    metaDiv.className = 'sale-meta';
+    metaDiv.textContent = (s.printed ? 'Printed' : 'Not printed') + (s.mirrored ? ' · synced to sheet' : '');
+    left.appendChild(nameDiv);
+    left.appendChild(metaDiv);
+    var right = document.createElement('div');
+    right.className = 'sale-amt';
+    right.textContent = 'Rs ' + (s.total_money != null ? s.total_money : '?');
+    row.appendChild(left);
+    row.appendChild(right);
+    row.onclick = function() { printSaleSlip(s); };
+    list.appendChild(row);
+  });
+}
+
+function setPosStatus(msg) { document.getElementById('pos-status').textContent = msg; }
+function showPosError(msg) {
+  var box = document.getElementById('pos-error');
+  box.textContent = msg;
+  box.classList.remove('hidden');
+}
+function hidePosError() { document.getElementById('pos-error').classList.add('hidden'); }
+
+/* ---- ESC/POS byte builder ----
+   Raw ESC/POS command bytes, same protocol proven working over USB
+   in the Windows prototype test. */
+var ESC = 0x1B, GS = 0x1D;
+function escposInit() { return [ESC, 0x40]; }
+function escposAlignCenter() { return [ESC, 0x61, 1]; }
+function escposAlignLeft() { return [ESC, 0x61, 0]; }
+function escposBoldOn() { return [ESC, 0x45, 1]; }
+function escposBoldOff() { return [ESC, 0x45, 0]; }
+function escposDoubleSize() { return [GS, 0x21, 0x11]; }
+function escposNormalSize() { return [GS, 0x21, 0x00]; }
+function escposText(str) {
+  var bytes = [];
+  for (var i = 0; i < str.length; i++) bytes.push(str.charCodeAt(i) & 0xFF);
+  return bytes;
+}
+function escposFeed(lines) {
+  var out = [];
+  for (var i = 0; i < (lines || 1); i++) out.push(0x0A);
+  return out;
+}
+function escposDivider() { return escposText('--------------------------------').concat(escposFeed(1)); }
+
+function buildSlipBytes(sale) {
+  var bytes = [];
+  bytes = bytes.concat(escposInit(), escposAlignCenter(), escposBoldOn());
+  bytes = bytes.concat(escposText('FOOD GARAGE'), escposFeed(2));
+  bytes = bytes.concat(escposAlignLeft(), escposBoldOff());
+  bytes = bytes.concat(escposText('Customer:'), escposFeed(1));
+  bytes = bytes.concat(escposDoubleSize(), escposBoldOn());
+  bytes = bytes.concat(escposText(sale.customer_name || 'Walk-in'), escposFeed(2));
+  bytes = bytes.concat(escposNormalSize(), escposBoldOff());
+  bytes = bytes.concat(escposText('Amount:'), escposFeed(1));
+  bytes = bytes.concat(escposDoubleSize(), escposBoldOn());
+  bytes = bytes.concat(escposText('Rs ' + sale.total_money), escposFeed(2));
+  bytes = bytes.concat(escposNormalSize(), escposBoldOff());
+  bytes = bytes.concat(escposDivider());
+  bytes = bytes.concat(escposFeed(3));
+  return new Uint8Array(bytes);
+}
+
+function buildEndOfShiftBytes(sales, shiftId) {
+  var total = 0;
+  var byMethod = {};
+  sales.forEach(function(s) {
+    var amt = Number(s.total_money) || 0;
+    total += amt;
+    var m = s.payment_method || 'Other';
+    byMethod[m] = (byMethod[m] || 0) + amt;
+  });
+  var bytes = [];
+  bytes = bytes.concat(escposInit(), escposAlignCenter(), escposBoldOn());
+  bytes = bytes.concat(escposText('FOOD GARAGE'), escposFeed(1));
+  bytes = bytes.concat(escposText('END OF SHIFT'), escposFeed(2));
+  bytes = bytes.concat(escposBoldOff(), escposAlignLeft());
+  bytes = bytes.concat(escposDivider());
+  sales.forEach(function(s) {
+    var name = (s.customer_name || 'Walk-in').slice(0, 16);
+    while (name.length < 16) name += ' ';
+    bytes = bytes.concat(escposText(name + 'Rs ' + s.total_money), escposFeed(1));
+  });
+  bytes = bytes.concat(escposDivider(), escposBoldOn());
+  bytes = bytes.concat(escposText('TOTAL   Rs ' + total), escposFeed(2));
+  bytes = bytes.concat(escposBoldOff());
+  Object.keys(byMethod).forEach(function(m) {
+    bytes = bytes.concat(escposText(m + '   Rs ' + byMethod[m]), escposFeed(1));
+  });
+  bytes = bytes.concat(escposDivider());
+  bytes = bytes.concat(escposText('Total Orders: ' + sales.length), escposFeed(3));
+  return new Uint8Array(bytes);
+}
+
+/* ---- WebUSB printer ----
+   PT-210 / "GEZHI micro-printer" — vendor ID from the Windows
+   hardware ID (USB\VID_28E9&PID_0289). This runs over USB, a
+   separate physical/transport layer from Loyverse's Bluetooth
+   link to the same printer, so the two connections do not
+   conflict with each other. */
+var usbPrinterDevice = null;
+var USB_PRINTER_FILTERS = [{ vendorId: 0x28E9 }];
+
+async function connectPrinter() {
+  hidePosError();
+  if (!navigator.usb) {
+    showPosError('This browser does not support WebUSB. Use Chrome or Edge (desktop or Android).');
+    return;
+  }
+  try {
+    var device = await navigator.usb.requestDevice({ filters: USB_PRINTER_FILTERS });
+    await device.open();
+    if (device.configuration === null) await device.selectConfiguration(1);
+    var iface = device.configuration.interfaces[0];
+    await device.claimInterface(iface.interfaceNumber);
+    usbPrinterDevice = {
+      device: device,
+      interfaceNumber: iface.interfaceNumber,
+      endpointOut: findOutEndpoint(iface)
+    };
+    setPosStatus('Printer connected.');
+  } catch (e) {
+    showPosError('Could not connect to printer: ' + e.message);
+  }
+}
+
+function findOutEndpoint(iface) {
+  var alt = iface.alternates[0];
+  var ep = alt.endpoints.find(function(e) { return e.direction === 'out'; });
+  return ep ? ep.endpointNumber : 1;
+}
+
+async function sendToPrinter(bytes) {
+  if (!usbPrinterDevice) {
+    await connectPrinter();
+    if (!usbPrinterDevice) throw new Error('Printer not connected.');
+  }
+  await usbPrinterDevice.device.transferOut(usbPrinterDevice.endpointOut, bytes);
+}
+
+async function printSaleSlip(sale) {
+  hidePosError();
+  try {
+    await sendToPrinter(buildSlipBytes(sale));
+    sale.printed = true;
+    await posDbPut('sales', sale);
+    await renderSalesList();
+  } catch (e) {
+    showPosError('Print failed: ' + e.message);
+  }
+}
+
+async function printEndOfShiftReport(shiftId) {
+  var allSales = await posDbGetAll('sales');
+  var shiftSales = allSales.filter(function(s) { return s.shift_id === shiftId; });
+  try {
+    await sendToPrinter(buildEndOfShiftBytes(shiftSales, shiftId));
+  } catch (e) {
+    showPosError('Could not print end-of-shift report: ' + e.message);
+  }
+}
+
+async function closeShiftAndPrint() {
+  // Manual fallback: prints a report for today's synced sales, in case
+  // automatic shift-close detection hasn't fired yet.
+  hidePosError();
+  var allSales = await posDbGetAll('sales');
+  var todayStr = new Date().toDateString();
+  var todaysSales = allSales.filter(function(s) { return new Date(s.created_at).toDateString() === todayStr; });
+  if (todaysSales.length === 0) {
+    showPosError('No sales recorded today yet.');
+    return;
+  }
+  try {
+    await sendToPrinter(buildEndOfShiftBytes(todaysSales, 'manual'));
+    setPosStatus('End-of-shift report printed.');
+  } catch (e) {
+    showPosError('Could not print report: ' + e.message);
+  }
+}
+
+/* ---- Polling ---- */
+var posPollHandle = null;
+function startPosPolling() {
+  if (posPollHandle) clearInterval(posPollHandle);
+  posPollHandle = setInterval(function() {
+    if (posSettings.loyverseToken) syncNow();
+  }, 20000);
+}
+
+/* ---- Init ---- */
+async function initPos() {
+  try {
+    posDb = await openPosDb();
+    await loadPosSettings();
+    await renderSalesList();
+    if (posSettings.loyverseToken) startPosPolling();
+  } catch (e) {
+    console.warn('POS init failed:', e);
+  }
+}
+
 /* ===== Init ===== */
 document.getElementById('input-date').value = todayDDMMYYYY();
 loadDishes();
+initPos();
 </script>
 </body>
 </html>
