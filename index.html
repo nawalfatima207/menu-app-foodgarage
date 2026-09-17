@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Nastaliq+Urdu&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Nastaliq+Urdu&family=Noto+Sans+Arabic&display=swap" rel="stylesheet">
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   body {
@@ -1492,9 +1492,21 @@ async function ensureUrduFontLoaded() {
   if (urduFontReady) return;
   try {
     await document.fonts.load("32px 'Noto Nastaliq Urdu'");
+    await document.fonts.load("32px 'Noto Sans Arabic'");
     await document.fonts.ready;
   } catch (e) { /* fall through and print with whatever font is available */ }
   urduFontReady = true;
+}
+
+// Nastaliq has no Latin glyphs, so a line mixing English (e.g. a bank name)
+// with Urdu would otherwise render half in Nastaliq and half in a fallback
+// font (visibly mismatched). Noto Sans Arabic covers both scripts in one
+// font, so mixed lines use that instead, keeping the whole line consistent.
+function containsLatinLetters(str) {
+  return /[A-Za-z]/.test(str);
+}
+function fontFamilyFor(line) {
+  return containsLatinLetters(line) ? "'Noto Sans Arabic'" : "'Noto Nastaliq Urdu'";
 }
 
 async function textToRasterBytes(text, opts) {
@@ -1504,17 +1516,16 @@ async function textToRasterBytes(text, opts) {
   var fontSize = opts.fontSize || 40;
   var maxWidthPx = opts.maxWidthPx || 384; // ~58mm paper at 203dpi; 384/8 = 48 bytes/row, standard
   var align = opts.align || 'center';
-  var fontSpec = fontSize + "px 'Noto Nastaliq Urdu', Arial, sans-serif";
   var padding = 10;
   var usableWidth = maxWidthPx - padding * 2;
 
   var measureCanvas = document.createElement('canvas');
   var mctx = measureCanvas.getContext('2d');
-  mctx.font = fontSpec;
   mctx.direction = 'rtl';
 
   // Wrap into multiple lines instead of squishing long text onto one —
   // compressing long Urdu strings distorts the joined letterforms badly.
+  mctx.font = fontSize + "px " + fontFamilyFor(text) + ", sans-serif";
   var words = text.split(' ');
   var lines = [];
   var current = '';
@@ -1529,25 +1540,43 @@ async function textToRasterBytes(text, opts) {
   }
   if (current) lines.push(current);
 
-  var lineHeight = Math.ceil(fontSize * 1.5); // room for Urdu's above/below diacritics
+  // Measure each line's ACTUAL rendered bounds (not just generic font
+  // metrics) — Nastaliq's strokes extend well above/below what a normal
+  // font would, and a fixed guessed offset was clipping the tops.
+  var lineMetrics = lines.map(function(line) {
+    mctx.font = fontSize + "px " + fontFamilyFor(line) + ", sans-serif";
+    var m = mctx.measureText(line);
+    return {
+      line: line,
+      font: fontFamilyFor(line),
+      width: Math.min(Math.ceil(m.width), usableWidth),
+      ascent: m.actualBoundingBoxAscent || fontSize * 1.0,
+      descent: m.actualBoundingBoxDescent || fontSize * 0.5
+    };
+  });
+  var maxAscent = Math.max.apply(null, lineMetrics.map(function(m) { return m.ascent; }));
+  var maxDescent = Math.max.apply(null, lineMetrics.map(function(m) { return m.descent; }));
+  var topPad = 6, bottomPad = 6, linePad = 8;
+  var lineHeight = maxAscent + maxDescent + linePad;
+
   var canvas = document.createElement('canvas');
   canvas.width = maxWidthPx;
-  canvas.height = lineHeight * lines.length + 6;
+  canvas.height = Math.ceil(lineHeight * lines.length + topPad + bottomPad);
   var ctx = canvas.getContext('2d');
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = '#000';
-  ctx.font = fontSpec;
   ctx.direction = 'rtl';
-  ctx.textBaseline = 'top';
+  ctx.textBaseline = 'alphabetic';
   ctx.textAlign = 'left';
 
-  for (var li = 0; li < lines.length; li++) {
-    var lineWidth = Math.min(Math.ceil(ctx.measureText(lines[li]).width), usableWidth);
-    var x = align === 'center' ? (canvas.width - lineWidth) / 2 :
-            (align === 'right' ? canvas.width - lineWidth - padding : padding);
-    ctx.fillText(lines[li], Math.max(x, 0), li * lineHeight + 3);
-  }
+  lineMetrics.forEach(function(m, li) {
+    ctx.font = fontSize + "px " + m.font + ", sans-serif";
+    var x = align === 'center' ? (canvas.width - m.width) / 2 :
+            (align === 'right' ? canvas.width - m.width - padding : padding);
+    var y = topPad + maxAscent + li * lineHeight;
+    ctx.fillText(m.line, Math.max(x, 0), y);
+  });
 
   return canvasToEscposRaster(canvas);
 }
