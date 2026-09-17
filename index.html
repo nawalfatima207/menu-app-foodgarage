@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Nastaliq+Urdu&display=swap" rel="stylesheet">
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   body {
@@ -1261,16 +1264,32 @@ async function loyverseFetch(path, params) {
       .join('&');
     if (qs) url += '&' + qs;
   }
-  var res = await fetch(url);
-  if (!res.ok) {
-    var text = await res.text().catch(function(){ return ''; });
-    throw new Error('Proxy error ' + res.status + ': ' + text);
+
+  var lastErr = null;
+  for (var attempt = 1; attempt <= 2; attempt++) {
+    try {
+      var res = await fetch(url);
+      var text = await res.text();
+      // Apps Script occasionally returns an HTML error/interstitial page
+      // instead of JSON on a cold start or transient hiccup — treat that
+      // as retryable rather than surfacing it as a hard failure every time.
+      if (!res.ok || text.trim().charAt(0) !== '{') {
+        throw new Error('Proxy error ' + res.status + (text ? ': ' + text.slice(0, 150) : ''));
+      }
+      return JSON.parse(text);
+    } catch (e) {
+      lastErr = e;
+      if (attempt < 2) await new Promise(function(r) { setTimeout(r, 1200); });
+    }
   }
-  return res.json();
+  throw lastErr;
 }
 
 /* ---- Sync ---- */
+var posSyncInFlight = false;
 async function syncNow() {
+  if (posSyncInFlight) return; // avoid overlapping polls piling up on the Apps Script
+  posSyncInFlight = true;
   setPosStatus('Syncing...');
   hidePosError();
   try {
@@ -1281,6 +1300,8 @@ async function syncNow() {
   } catch (e) {
     showPosError(e.message || 'Sync failed.');
     setPosStatus('Sync failed — check settings and connection.');
+  } finally {
+    posSyncInFlight = false;
   }
 }
 
@@ -1452,15 +1473,99 @@ function escposFeed(lines) {
 }
 function escposDivider() { return escposText('--------------------------------').concat(escposFeed(1)); }
 
-function buildSlipBytes(sale) {
+/* ---- Unicode-safe text (Urdu / any non-ASCII) ----
+   Thermal printers only understand a single-byte codepage — sending
+   Urdu characters as raw text bytes corrupts them (each character gets
+   truncated to one byte, which the printer then misreads using its own
+   built-in codepage, producing garbage glyphs). The fix: render the text
+   as a bitmap using the browser's own text engine (which shapes Urdu
+   correctly) and print that as an image instead. */
+function containsNonAscii(str) {
+  for (var i = 0; i < str.length; i++) {
+    if (str.charCodeAt(i) > 126) return true;
+  }
+  return false;
+}
+
+var urduFontReady = false;
+async function ensureUrduFontLoaded() {
+  if (urduFontReady) return;
+  try {
+    await document.fonts.load("32px 'Noto Nastaliq Urdu'");
+    await document.fonts.ready;
+  } catch (e) { /* fall through and print with whatever font is available */ }
+  urduFontReady = true;
+}
+
+async function textToRasterBytes(text, opts) {
+  opts = opts || {};
+  await ensureUrduFontLoaded();
+
+  var fontSize = opts.fontSize || 40;
+  var maxWidthPx = opts.maxWidthPx || 384; // ~58mm paper at 203dpi; 384/8 = 48 bytes/row, standard
+  var align = opts.align || 'center';
+
+  var measureCanvas = document.createElement('canvas');
+  var mctx = measureCanvas.getContext('2d');
+  mctx.font = fontSize + "px 'Noto Nastaliq Urdu', Arial, sans-serif";
+  mctx.direction = 'rtl';
+  var textWidth = Math.min(Math.ceil(mctx.measureText(text).width) + 10, maxWidthPx);
+  var textHeight = Math.ceil(fontSize * 1.6); // extra room for Urdu's above/below diacritics
+
+  var canvas = document.createElement('canvas');
+  canvas.width = maxWidthPx;
+  canvas.height = textHeight;
+  var ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#000';
+  ctx.font = fontSize + "px 'Noto Nastaliq Urdu', Arial, sans-serif";
+  ctx.direction = 'rtl';
+  ctx.textBaseline = 'top';
+  var x = align === 'center' ? (canvas.width - textWidth) / 2 :
+          (align === 'right' ? canvas.width - textWidth : 0);
+  ctx.textAlign = 'left';
+  ctx.fillText(text, Math.max(x, 0), 6, maxWidthPx);
+
+  return canvasToEscposRaster(canvas);
+}
+
+function canvasToEscposRaster(canvas) {
+  var ctx = canvas.getContext('2d');
+  var w = canvas.width, h = canvas.height;
+  var imgData = ctx.getImageData(0, 0, w, h).data;
+  var bytesPerRow = Math.ceil(w / 8);
+  var raster = new Uint8Array(bytesPerRow * h);
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      var idx = (y * w + x) * 4;
+      var lum = 0.299 * imgData[idx] + 0.587 * imgData[idx + 1] + 0.114 * imgData[idx + 2];
+      if (imgData[idx + 3] > 128 && lum < 160) {
+        raster[y * bytesPerRow + (x >> 3)] |= (0x80 >> (x % 8));
+      }
+    }
+  }
+  var header = [GS, 0x76, 0x30, 0x00, bytesPerRow & 0xFF, (bytesPerRow >> 8) & 0xFF, h & 0xFF, (h >> 8) & 0xFF];
+  return header.concat(Array.from(raster));
+}
+
+// Picks plain ESC/POS text bytes for ASCII (fast), or a rendered bitmap
+// for anything containing Urdu/other non-ASCII characters (correct).
+async function escposTextAuto(str, opts) {
+  if (!containsNonAscii(str)) return escposText(str);
+  return await textToRasterBytes(str, opts);
+}
+
+async function buildSlipBytes(sale) {
   var bytes = [];
   bytes = bytes.concat(escposInit(), escposAlignCenter(), escposBoldOn());
   bytes = bytes.concat(escposText('FOOD GARAGE'), escposFeed(2));
   bytes = bytes.concat(escposAlignLeft(), escposBoldOff());
   bytes = bytes.concat(escposText('Customer:'), escposFeed(1));
-  bytes = bytes.concat(escposDoubleSize(), escposBoldOn());
-  bytes = bytes.concat(escposText(sale.customer_name || 'Walk-in'), escposFeed(2));
-  bytes = bytes.concat(escposNormalSize(), escposBoldOff());
+  bytes = bytes.concat(escposAlignCenter());
+  bytes = bytes.concat(await escposTextAuto(sale.customer_name || 'Walk-in', { fontSize: 44 }), escposFeed(1));
+  bytes = bytes.concat(escposAlignLeft());
+  bytes = bytes.concat(escposFeed(1));
   bytes = bytes.concat(escposText('Amount:'), escposFeed(1));
   bytes = bytes.concat(escposDoubleSize(), escposBoldOn());
   bytes = bytes.concat(escposText('Rs ' + sale.total_money), escposFeed(2));
@@ -1470,7 +1575,7 @@ function buildSlipBytes(sale) {
   return new Uint8Array(bytes);
 }
 
-function buildEndOfShiftBytes(sales, shiftId) {
+async function buildEndOfShiftBytes(sales, shiftId) {
   var total = 0;
   var byMethod = {};
   sales.forEach(function(s) {
@@ -1485,11 +1590,18 @@ function buildEndOfShiftBytes(sales, shiftId) {
   bytes = bytes.concat(escposText('END OF SHIFT'), escposFeed(2));
   bytes = bytes.concat(escposBoldOff(), escposAlignLeft());
   bytes = bytes.concat(escposDivider());
-  sales.forEach(function(s) {
-    var name = (s.customer_name || 'Walk-in').slice(0, 16);
-    while (name.length < 16) name += ' ';
-    bytes = bytes.concat(escposText(name + 'Rs ' + s.total_money), escposFeed(1));
-  });
+  for (var i = 0; i < sales.length; i++) {
+    var s = sales[i];
+    var name = s.customer_name || 'Walk-in';
+    if (containsNonAscii(name)) {
+      bytes = bytes.concat(await escposTextAuto(name, { fontSize: 32, align: 'left', maxWidthPx: 300 }));
+      bytes = bytes.concat(escposText('Rs ' + s.total_money), escposFeed(1));
+    } else {
+      var padded = name.slice(0, 16);
+      while (padded.length < 16) padded += ' ';
+      bytes = bytes.concat(escposText(padded + 'Rs ' + s.total_money), escposFeed(1));
+    }
+  }
   bytes = bytes.concat(escposDivider(), escposBoldOn());
   bytes = bytes.concat(escposText('TOTAL   Rs ' + total), escposFeed(2));
   bytes = bytes.concat(escposBoldOff());
@@ -1572,7 +1684,7 @@ async function sendToPrinter(bytes) {
 async function printSaleSlip(sale) {
   hidePosError();
   try {
-    await sendToPrinter(buildSlipBytes(sale));
+    await sendToPrinter(await buildSlipBytes(sale));
     sale.printed = true;
     await posDbPut('sales', sale);
     await renderSalesList();
@@ -1585,7 +1697,7 @@ async function printEndOfShiftReport(shiftId) {
   var allSales = await posDbGetAll('sales');
   var shiftSales = allSales.filter(function(s) { return s.shift_id === shiftId; });
   try {
-    await sendToPrinter(buildEndOfShiftBytes(shiftSales, shiftId));
+    await sendToPrinter(await buildEndOfShiftBytes(shiftSales, shiftId));
   } catch (e) {
     showPosError('Could not print end-of-shift report: ' + e.message);
   }
@@ -1603,7 +1715,7 @@ async function closeShiftAndPrint() {
     return;
   }
   try {
-    await sendToPrinter(buildEndOfShiftBytes(todaysSales, 'manual'));
+    await sendToPrinter(await buildEndOfShiftBytes(todaysSales, 'manual'));
     setPosStatus('End-of-shift report printed.');
   } catch (e) {
     showPosError('Could not print report: ' + e.message);
@@ -1616,7 +1728,7 @@ function startPosPolling() {
   if (posPollHandle) clearInterval(posPollHandle);
   posPollHandle = setInterval(function() {
     if (posSettings.salesScriptUrl) syncNow();
-  }, 20000);
+  }, 7000);
 }
 
 /* ---- Init ---- */
